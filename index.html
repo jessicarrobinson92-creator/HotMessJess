@@ -552,6 +552,7 @@
     <button class="nav-btn" onclick="showPage('addRecipe')">+ Add Recipe</button>
     <button class="nav-btn" onclick="showPage('planner')">Weekly Planner</button>
     <button class="nav-btn" onclick="showPage('finder')">Meal Finder</button>
+    <button class="nav-btn" onclick="showPage('steal')">🕵 Steal a Recipe</button>
   </div>
 </nav>
 
@@ -603,7 +604,58 @@
   </div>
   <div class="recipe-grid" id="recipeGrid"></div>
 </div>
-
+<!-- ════════════════════════════
+     STEAL A RECIPE
+════════════════════════════ -->
+<div id="page-steal" class="page">
+  <div class="page-header">
+    <h1>🕵 Steal a Recipe</h1>
+    <p>Paste a recipe from any website and add it to your collection. ("Stealing" is just for laughs!)</p>
+  </div>
+  <div class="add-recipe-form">
+    <div class="form-group">
+      <label>Recipe URL (optional - for your reference)</label>
+      <input type="url" id="stealUrl" placeholder="https://www.example.com/recipe/123">
+    </div>
+    <div class="form-group">
+      <label>Recipe Name *</label>
+      <input type="text" id="stealName" placeholder="e.g. Creamy Chicken Alfredo">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Cuisine Type</label>
+        <input type="text" id="stealCuisine" placeholder="e.g. Italian, Thai, etc.">
+      </div>
+      <div class="form-group">
+        <label>Meal Type</label>
+        <select id="stealType">
+          <option value="Main">Main</option>
+          <option value="Side">Side</option>
+          <option value="Brunch">Brunch</option>
+          <option value="Dessert">Dessert</option>
+          <option value="Soup/Stew">Soup/Stew</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Emoji Icon (optional)</label>
+      <input type="text" id="stealEmoji" placeholder="🍝" maxlength="4">
+    </div>
+    <div class="form-group">
+      <label>Ingredients *</label>
+      <textarea id="stealIngredients" rows="6" placeholder="Paste ingredients here - one per line, or paste the whole ingredient block from a website and we'll parse it!&#10;&#10;Example:&#10;2 cups flour&#10;1 egg&#10;1/2 cup sugar&#10;Salt and pepper to taste"></textarea>
+      <p style="font-size: 0.8rem; color: #999; margin-top: 0.35rem;">💡 Tip: Just paste the ingredient list and we'll split them automatically!</p>
+    </div>
+    <div class="form-group">
+      <label>Notes / Directions (optional)</label>
+      <textarea id="stealNotes" rows="4" placeholder="Paste cooking steps, tips, or special instructions here..."></textarea>
+    </div>
+    <div style="display:flex;gap:0.75rem;flex-wrap:wrap;">
+      <button class="btn btn-primary" onclick="stealRecipe()">✅ Save Recipe</button>
+      <button class="btn btn-outline" onclick="showPage('recipes')">Cancel</button>
+    </div>
+  </div>
+</div>
 <!-- ════════════════════════════
      ADD RECIPE
 ════════════════════════════ -->
@@ -1232,6 +1284,49 @@ document.querySelectorAll('.modal-overlay').forEach(o => {
 
 // Init
 renderHome();
+
+  // ═══════════════════════════════════════════
+// STEAL A RECIPE
+// ═══════════════════════════════════════════
+
+function stealRecipe() {
+  const name = document.getElementById('stealName').value.trim();
+  if (!name) { alert('Please enter a recipe name.'); return; }
+
+  const ingredientsRaw = document.getElementById('stealIngredients').value.trim();
+  if (!ingredientsRaw) { alert('Please paste some ingredients.'); return; }
+
+  // Split by newlines and clean up
+  const ingredients = ingredientsRaw
+    .split(/\n/)
+    .map(line => line.trim())
+    .filter(line => line.length > 0);
+
+  const r = {
+    id: nextId++,
+    name,
+    emoji: document.getElementById('stealEmoji').value.trim() || '🍽️',
+    cuisine: document.getElementById('stealCuisine').value.trim(),
+    type: document.getElementById('stealType').value,
+    description: document.getElementById('stealUrl').value.trim() || '',
+    ingredients,
+    notes: document.getElementById('stealNotes').value.trim()
+  };
+
+  recipes.push(r);
+
+  // Clear form
+  document.getElementById('stealUrl').value = '';
+  document.getElementById('stealName').value = '';
+  document.getElementById('stealCuisine').value = '';
+  document.getElementById('stealType').value = 'Main';
+  document.getElementById('stealEmoji').value = '';
+  document.getElementById('stealIngredients').value = '';
+  document.getElementById('stealNotes').value = '';
+
+  toast(`"${r.name}" stolen and saved! 🕵️‍♀️`);
+  showPage('recipes');
+}
 </script>
 </body>
 </html>
