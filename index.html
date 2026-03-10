@@ -69,6 +69,34 @@
   .nav-btn:hover { color: #fff; background: rgba(255,255,255,0.08); }
   .nav-btn.active { color: var(--gold); background: rgba(212,168,83,0.15); }
 
+  /* ── LOADING OVERLAY ── */
+  #loadingOverlay {
+    position: fixed;
+    inset: 0;
+    background: var(--cream);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 999;
+    gap: 1rem;
+  }
+  #loadingOverlay.hidden { display: none; }
+  .loading-spinner {
+    width: 48px; height: 48px;
+    border: 4px solid var(--border);
+    border-top-color: var(--rust);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #loadingOverlay p {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.2rem;
+    color: var(--brown);
+    font-style: italic;
+  }
+
   /* ── PAGES ── */
   .page { display: none; padding: 2rem; max-width: 1200px; margin: 0 auto; }
   .page.active { display: block; animation: fadeIn 0.3s ease; }
@@ -355,9 +383,7 @@
     text-transform: uppercase;
   }
   .day-content { padding: 0.75rem 0.5rem; min-height: 120px; }
-  .day-slot {
-    margin-bottom: 0.5rem;
-  }
+  .day-slot { margin-bottom: 0.5rem; }
   .day-slot-label { font-size: 0.7rem; color: #aaa; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 0.25rem; }
   .planned-meal {
     background: var(--light-rust);
@@ -539,9 +565,27 @@
   .recipe-picker-item .pe { font-size: 1.5rem; }
   .recipe-picker-item .pn { font-size: 0.92rem; font-weight: 500; }
   .recipe-picker-item .pt { font-size: 0.78rem; color: #aaa; }
+
+  /* ── SYNC STATUS ── */
+  .sync-badge {
+    margin-left: auto;
+    font-size: 0.75rem;
+    padding: 0.2rem 0.6rem;
+    border-radius: 20px;
+    font-weight: 500;
+  }
+  .sync-badge.synced { background: #e8f5e8; color: #3d7a3d; }
+  .sync-badge.syncing { background: #fff3cd; color: #856404; }
+  .sync-badge.error { background: #fde8e8; color: #a82020; }
 </style>
 </head>
 <body>
+
+<!-- LOADING OVERLAY -->
+<div id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <p>Loading your kitchen…</p>
+</div>
 
 <!-- NAV -->
 <nav>
@@ -554,6 +598,7 @@
     <button class="nav-btn" onclick="showPage('finder')">Meal Finder</button>
     <button class="nav-btn" onclick="showPage('steal')">🕵 Steal a Recipe</button>
   </div>
+  <span class="sync-badge synced" id="syncBadge">☁️ Saved</span>
 </nav>
 
 <!-- TOAST -->
@@ -604,6 +649,7 @@
   </div>
   <div class="recipe-grid" id="recipeGrid"></div>
 </div>
+
 <!-- ════════════════════════════
      STEAL A RECIPE
 ════════════════════════════ -->
@@ -656,6 +702,7 @@
     </div>
   </div>
 </div>
+
 <!-- ════════════════════════════
      ADD RECIPE
 ════════════════════════════ -->
@@ -695,7 +742,6 @@
       <label>Description (optional)</label>
       <input type="text" id="rDesc" placeholder="A short description of this dish…">
     </div>
-
     <div class="form-group">
       <label>Ingredients</label>
       <div id="ingredientsList">
@@ -706,12 +752,10 @@
       </div>
       <button class="btn btn-secondary btn-sm" onclick="addIngredientRow()" style="margin-top:0.5rem;">+ Add Ingredient</button>
     </div>
-
     <div class="form-group">
       <label>Notes / Tips (optional)</label>
       <textarea id="rNotes" rows="3" placeholder="Any cooking tips, substitutions, or personal notes…"></textarea>
     </div>
-
     <div style="display:flex;gap:0.75rem;">
       <button class="btn btn-primary" onclick="saveRecipe()">Save Recipe</button>
       <button class="btn btn-outline" onclick="showPage('recipes')">Cancel</button>
@@ -816,517 +860,574 @@
   </div>
 </div>
 
-<script>
-// ═══════════════════════════════════════════
-// DATA STORE
-// ═══════════════════════════════════════════
+<!-- ════════════════════════════
+     FIREBASE + APP SCRIPTS
+════════════════════════════ -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import {
+    getFirestore, collection, doc,
+    getDocs, setDoc, deleteDoc, onSnapshot
+  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-const SAT_IDX = 5; // Saturday = brunch day
-const SUN_IDX = 6; // Sunday = brunch day
+  // ── Firebase config ──
+  const firebaseConfig = {
+    apiKey: "AIzaSyAnk0aDGd0QNCcFUEzbcQTkwEbMprAgUq4",
+    authDomain: "hot-mess-jess.firebaseapp.com",
+    projectId: "hot-mess-jess",
+    storageBucket: "hot-mess-jess.firebasestorage.app",
+    messagingSenderId: "1056464992313",
+    appId: "1:1056464992313:web:28b271e05fd5fcb58135e8",
+    measurementId: "G-KS7VZJTPV3"
+  };
 
-// Sample starter recipes — replace with your own!
-let recipes = [
-  {
-    id: 1, name: "Herb Roasted Chicken", emoji: "🍗",
-    cuisine: "American", type: "Main",
-    description: "Crispy-skinned whole chicken with rosemary and garlic.",
-    ingredients: ["1 whole chicken (4-5 lbs)", "4 cloves garlic", "2 tbsp fresh rosemary", "2 tbsp butter", "Salt & pepper", "1 lemon"],
-    notes: "Pat the chicken completely dry before roasting for the crispiest skin. Rest 10 min before carving."
-  },
-  {
-    id: 2, name: "Garlic Butter Pasta", emoji: "🍝",
-    cuisine: "Italian", type: "Main",
-    description: "Simple weeknight pasta with toasted garlic and parmesan.",
-    ingredients: ["1 lb spaghetti", "6 cloves garlic, sliced", "4 tbsp butter", "½ cup parmesan", "Red pepper flakes", "Fresh parsley"],
-    notes: "Reserve pasta water before draining — it makes the sauce silky."
-  },
-  {
-    id: 3, name: "Sheet Pan Salmon", emoji: "🐟",
-    cuisine: "American", type: "Main",
-    description: "Salmon fillets roasted with lemon, dill and asparagus.",
-    ingredients: ["4 salmon fillets", "1 bunch asparagus", "2 lemons", "3 tbsp olive oil", "Fresh dill", "Salt & pepper"],
-    notes: "Cook at 400°F for 12–15 min. Don't overcrowd the pan."
-  },
-  {
-    id: 4, name: "Classic Avocado Toast", emoji: "🥑",
-    cuisine: "American", type: "Brunch",
-    description: "Creamy avocado on sourdough with a poached egg.",
-    ingredients: ["2 slices sourdough bread", "1 ripe avocado", "2 eggs", "Red pepper flakes", "Lemon juice", "Everything bagel seasoning"],
-    notes: "For the best poach, add a splash of vinegar to gently simmering water."
-  },
-  {
-    id: 5, name: "Chicken Tortilla Soup", emoji: "🥣",
-    cuisine: "Mexican", type: "Soup/Stew",
-    description: "Smoky, hearty soup loaded with corn, beans and crispy strips.",
-    ingredients: ["2 chicken breasts", "1 can black beans", "1 can corn", "1 can diced tomatoes", "4 cups chicken broth", "1 onion", "3 cloves garlic", "Cumin, chili powder", "Tortilla strips", "Sour cream, cilantro to top"],
-    notes: "Shred the chicken right in the pot using two forks. Top with crushed tortilla chips and a dollop of sour cream."
-  },
-  {
-    id: 6, name: "Steamed Rice", emoji: "🍚",
-    cuisine: "Asian", type: "Side",
-    description: "Perfect fluffy white rice every time.",
-    ingredients: ["2 cups long-grain white rice", "2¾ cups water", "1 tsp salt", "1 tbsp butter (optional)"],
-    notes: "Rinse rice until water runs clear. After cooking, let it steam covered for 5 min off heat."
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  // ── Collections ──
+  const RECIPES_COL = collection(db, "recipes");
+  const PLAN_DOC    = doc(db, "weekPlan", "current");
+
+  // ══════════════════════════════════════════════
+  // STATE
+  // ══════════════════════════════════════════════
+  const DAYS = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const SAT_IDX = 5;
+  const SUN_IDX = 6;
+
+  let recipes = [];
+  let weekPlan = {};
+  DAYS.forEach(d => { weekPlan[d] = { dinner: [], brunch: [] }; });
+
+  let nextId = Date.now();
+  let finderChips = { meat: [], veg: [], starch: [], other: [] };
+  let currentAddMealDay = null;
+  let currentAddMealSlot = null;
+  let groceryVisible = false;
+
+  // ══════════════════════════════════════════════
+  // SYNC BADGE
+  // ══════════════════════════════════════════════
+  function setSyncBadge(state) {
+    const b = document.getElementById('syncBadge');
+    b.className = 'sync-badge ' + state;
+    b.textContent = state === 'synced' ? '☁️ Saved' : state === 'syncing' ? '⏳ Saving…' : '⚠️ Error';
   }
-];
 
-// Weekly plan: { Mon: { dinner: [{id, name}], brunch: [{id, name}] }, ... }
-let weekPlan = {};
-DAYS.forEach(d => { weekPlan[d] = { dinner: [], brunch: [] }; });
+  // ══════════════════════════════════════════════
+  // FIREBASE — RECIPES
+  // ══════════════════════════════════════════════
+  async function loadRecipes() {
+    const snap = await getDocs(RECIPES_COL);
+    recipes = snap.docs.map(d => ({ ...d.data(), id: d.id }));
+    // nextId stays as timestamp-based for new recipes
+  }
 
-let nextId = 10;
-let finderChips = { meat: [], veg: [], starch: [], other: [] };
-let currentAddMealDay = null;
-let currentAddMealSlot = null;
-let groceryVisible = false;
+  async function saveRecipeToFirebase(r) {
+    setSyncBadge('syncing');
+    try {
+      await setDoc(doc(db, "recipes", String(r.id)), r);
+      setSyncBadge('synced');
+    } catch(e) {
+      setSyncBadge('error');
+      console.error(e);
+    }
+  }
 
-// ═══════════════════════════════════════════
-// NAVIGATION
-// ═══════════════════════════════════════════
+  async function deleteRecipeFromFirebase(id) {
+    setSyncBadge('syncing');
+    try {
+      await deleteDoc(doc(db, "recipes", String(id)));
+      setSyncBadge('synced');
+    } catch(e) {
+      setSyncBadge('error');
+      console.error(e);
+    }
+  }
 
-function showPage(id) {
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById('page-' + id).classList.add('active');
-  document.querySelectorAll('.nav-btn').forEach(b => {
-    if (b.textContent.toLowerCase().includes(id === 'addRecipe' ? 'add' : id)) b.classList.add('active');
-  });
-  if (id === 'home') renderHome();
-  if (id === 'recipes') renderRecipes();
-  if (id === 'planner') renderPlanner();
-}
+  // ══════════════════════════════════════════════
+  // FIREBASE — WEEK PLAN
+  // ══════════════════════════════════════════════
+  async function loadWeekPlan() {
+    // Use onSnapshot so the planner stays live across tabs
+    onSnapshot(PLAN_DOC, (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        DAYS.forEach(d => {
+          weekPlan[d] = data[d] || { dinner: [], brunch: [] };
+        });
+        // Re-render planner if it's currently visible
+        if (document.getElementById('page-planner').classList.contains('active')) {
+          renderPlanner();
+        }
+      }
+    });
+  }
 
-// ═══════════════════════════════════════════
-// HOME
-// ═══════════════════════════════════════════
+  async function saveWeekPlan() {
+    setSyncBadge('syncing');
+    try {
+      await setDoc(PLAN_DOC, weekPlan);
+      setSyncBadge('synced');
+    } catch(e) {
+      setSyncBadge('error');
+      console.error(e);
+    }
+  }
 
-function renderHome() {
-  document.getElementById('statRecipes').textContent = recipes.length;
-  const planned = DAYS.reduce((n, d) => n + weekPlan[d].dinner.length + weekPlan[d].brunch.length, 0);
-  document.getElementById('statPlanned').textContent = planned;
-  const cuisines = new Set(recipes.map(r => r.cuisine).filter(Boolean));
-  document.getElementById('statCuisines').textContent = cuisines.size;
+  // ══════════════════════════════════════════════
+  // INIT — load data then show app
+  // ══════════════════════════════════════════════
+  async function init() {
+    try {
+      await loadRecipes();
+      await loadWeekPlan();
+    } catch(e) {
+      console.error("Firebase load error:", e);
+      setSyncBadge('error');
+    }
+    document.getElementById('loadingOverlay').classList.add('hidden');
+    renderHome();
+  }
 
-  const recent = [...recipes].slice(-3).reverse();
-  const g = document.getElementById('recentGrid');
-  g.innerHTML = recent.length ? recent.map(r => recipeCardHTML(r, true)).join('') :
-    '<p style="color:#aaa;font-size:0.95rem;">No recipes yet — add your first one!</p>';
-}
+  init();
 
-// ═══════════════════════════════════════════
-// RECIPES
-// ═══════════════════════════════════════════
+  // ══════════════════════════════════════════════
+  // NAVIGATION
+  // ══════════════════════════════════════════════
+  window.showPage = function(id) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('page-' + id).classList.add('active');
+    document.querySelectorAll('.nav-btn').forEach(b => {
+      if (b.textContent.toLowerCase().includes(id === 'addRecipe' ? 'add' : id)) b.classList.add('active');
+    });
+    if (id === 'home') renderHome();
+    if (id === 'recipes') renderRecipes();
+    if (id === 'planner') renderPlanner();
+  }
 
-function recipeCardHTML(r, small = false) {
-  return `<div class="recipe-card" onclick="openRecipeModal(${r.id})">
-    <div class="recipe-card-body">
-      <span class="recipe-card-emoji">${r.emoji || '🍽️'}</span>
-      <h3>${r.name}</h3>
-      <div class="recipe-card-meta">
+  // ══════════════════════════════════════════════
+  // HOME
+  // ══════════════════════════════════════════════
+  function renderHome() {
+    document.getElementById('statRecipes').textContent = recipes.length;
+    const planned = DAYS.reduce((n, d) => n + weekPlan[d].dinner.length + weekPlan[d].brunch.length, 0);
+    document.getElementById('statPlanned').textContent = planned;
+    const cuisines = new Set(recipes.map(r => r.cuisine).filter(Boolean));
+    document.getElementById('statCuisines').textContent = cuisines.size;
+
+    const recent = [...recipes].slice(-3).reverse();
+    const g = document.getElementById('recentGrid');
+    g.innerHTML = recent.length ? recent.map(r => recipeCardHTML(r, true)).join('') :
+      '<p style="color:#aaa;font-size:0.95rem;">No recipes yet — add your first one!</p>';
+  }
+
+  // ══════════════════════════════════════════════
+  // RECIPES
+  // ══════════════════════════════════════════════
+  function recipeCardHTML(r, small = false) {
+    return `<div class="recipe-card" onclick="openRecipeModal('${r.id}')">
+      <div class="recipe-card-body">
+        <span class="recipe-card-emoji">${r.emoji || '🍽️'}</span>
+        <h3>${r.name}</h3>
+        <div class="recipe-card-meta">
+          ${r.cuisine ? `<span class="tag tag-cuisine">${r.cuisine}</span>` : ''}
+          ${r.type ? `<span class="tag tag-type">${r.type}</span>` : ''}
+        </div>
+        ${r.description ? `<p>${r.description}</p>` : ''}
+        <div class="recipe-card-actions" onclick="event.stopPropagation()">
+          <button class="btn btn-primary btn-sm" onclick="quickAddToPlanner('${r.id}')">+ Meal Plan</button>
+          <button class="btn btn-outline btn-sm" onclick="deleteRecipe('${r.id}')">Delete</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderRecipes() {
+    const q = (document.getElementById('searchInput')?.value || '').toLowerCase();
+    const fc = document.getElementById('filterCuisine')?.value || '';
+    const ft = document.getElementById('filterType')?.value || '';
+
+    const sel = document.getElementById('filterCuisine');
+    if (sel) {
+      const cuisines = [...new Set(recipes.map(r => r.cuisine).filter(Boolean))];
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">All Cuisines</option>' +
+        cuisines.map(c => `<option value="${c}" ${c === cur ? 'selected' : ''}>${c}</option>`).join('');
+    }
+
+    let filtered = recipes.filter(r => {
+      const matchQ = !q || r.name.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q);
+      const matchC = !fc || r.cuisine === fc;
+      const matchT = !ft || r.type === ft;
+      return matchQ && matchC && matchT;
+    });
+
+    const grid = document.getElementById('recipeGrid');
+    grid.innerHTML = filtered.length ? filtered.map(r => recipeCardHTML(r)).join('') :
+      '<p style="color:#aaa;padding:2rem 0;">No recipes match your search.</p>';
+  }
+
+  window.openRecipeModal = function(id) {
+    const r = recipes.find(x => String(x.id) === String(id));
+    if (!r) return;
+    document.getElementById('modalContent').innerHTML = `
+      <div style="font-size:3rem;margin-bottom:0.5rem;">${r.emoji || '🍽️'}</div>
+      <h2>${r.name}</h2>
+      <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin:0.5rem 0 1rem;">
         ${r.cuisine ? `<span class="tag tag-cuisine">${r.cuisine}</span>` : ''}
         ${r.type ? `<span class="tag tag-type">${r.type}</span>` : ''}
       </div>
-      ${r.description ? `<p>${r.description}</p>` : ''}
-      <div class="recipe-card-actions" onclick="event.stopPropagation()">
-        <button class="btn btn-primary btn-sm" onclick="quickAddToPlanner(${r.id})">+ Meal Plan</button>
-        <button class="btn btn-outline btn-sm" onclick="deleteRecipe(${r.id})">Delete</button>
+      ${r.description ? `<p style="color:#666;font-size:0.95rem;margin-bottom:1rem;line-height:1.6;">${r.description}</p>` : ''}
+      <div class="modal-section">
+        <h4>Ingredients</h4>
+        <ul class="ingredient-list">${(r.ingredients || []).map(i => `<li>${i}</li>`).join('')}</ul>
       </div>
-    </div>
-  </div>`;
-}
-
-function renderRecipes() {
-  const q = (document.getElementById('searchInput')?.value || '').toLowerCase();
-  const fc = document.getElementById('filterCuisine')?.value || '';
-  const ft = document.getElementById('filterType')?.value || '';
-
-  // Update cuisine filter options
-  const sel = document.getElementById('filterCuisine');
-  if (sel) {
-    const cuisines = [...new Set(recipes.map(r => r.cuisine).filter(Boolean))];
-    const cur = sel.value;
-    sel.innerHTML = '<option value="">All Cuisines</option>' +
-      cuisines.map(c => `<option value="${c}" ${c === cur ? 'selected' : ''}>${c}</option>`).join('');
+      ${r.notes ? `<div class="modal-section"><h4>Notes & Tips</h4><div class="notes-box">${r.notes}</div></div>` : ''}
+      <div style="margin-top:1.5rem;display:flex;gap:0.75rem;">
+        <button class="btn btn-primary" onclick="quickAddToPlanner('${r.id}');closeModal('recipeModal')">+ Add to Meal Plan</button>
+      </div>
+    `;
+    document.getElementById('recipeModal').classList.add('open');
   }
 
-  let filtered = recipes.filter(r => {
-    const matchQ = !q || r.name.toLowerCase().includes(q) || (r.description || '').toLowerCase().includes(q);
-    const matchC = !fc || r.cuisine === fc;
-    const matchT = !ft || r.type === ft;
-    return matchQ && matchC && matchT;
-  });
+  window.closeModal = function(id) {
+    document.getElementById(id).classList.remove('open');
+  }
 
-  const grid = document.getElementById('recipeGrid');
-  grid.innerHTML = filtered.length ? filtered.map(r => recipeCardHTML(r)).join('') :
-    '<p style="color:#aaa;padding:2rem 0;">No recipes match your search.</p>';
-}
+  window.deleteRecipe = async function(id) {
+    if (!confirm('Delete this recipe?')) return;
+    recipes = recipes.filter(r => String(r.id) !== String(id));
+    await deleteRecipeFromFirebase(id);
+    renderRecipes();
+    toast('Recipe deleted.');
+  }
 
-function openRecipeModal(id) {
-  const r = recipes.find(x => x.id === id);
-  if (!r) return;
-  document.getElementById('modalContent').innerHTML = `
-    <div style="font-size:3rem;margin-bottom:0.5rem;">${r.emoji || '🍽️'}</div>
-    <h2>${r.name}</h2>
-    <div style="display:flex;gap:0.5rem;flex-wrap:wrap;margin:0.5rem 0 1rem;">
-      ${r.cuisine ? `<span class="tag tag-cuisine">${r.cuisine}</span>` : ''}
-      ${r.type ? `<span class="tag tag-type">${r.type}</span>` : ''}
-    </div>
-    ${r.description ? `<p style="color:#666;font-size:0.95rem;margin-bottom:1rem;line-height:1.6;">${r.description}</p>` : ''}
-    <div class="modal-section">
-      <h4>Ingredients</h4>
-      <ul class="ingredient-list">${(r.ingredients || []).map(i => `<li>${i}</li>`).join('')}</ul>
-    </div>
-    ${r.notes ? `<div class="modal-section"><h4>Notes & Tips</h4><div class="notes-box">${r.notes}</div></div>` : ''}
-    <div style="margin-top:1.5rem;display:flex;gap:0.75rem;">
-      <button class="btn btn-primary" onclick="quickAddToPlanner(${r.id});closeModal('recipeModal')">+ Add to Meal Plan</button>
-    </div>
-  `;
-  document.getElementById('recipeModal').classList.add('open');
-}
+  // ══════════════════════════════════════════════
+  // ADD RECIPE
+  // ══════════════════════════════════════════════
+  window.addIngredientRow = function() {
+    const row = document.createElement('div');
+    row.className = 'ingredient-input-row';
+    row.innerHTML = `<input type="text" class="ing-input" placeholder="e.g. 1 cup flour"><button class="remove-ing" onclick="removeIngredientRow(this)" title="Remove">✕</button>`;
+    document.getElementById('ingredientsList').appendChild(row);
+  }
 
-function closeModal(id) {
-  document.getElementById(id).classList.remove('open');
-}
+  window.removeIngredientRow = function(btn) {
+    const rows = document.querySelectorAll('#ingredientsList .ingredient-input-row');
+    if (rows.length > 1) btn.closest('.ingredient-input-row').remove();
+    else btn.closest('.ingredient-input-row').querySelector('input').value = '';
+  }
 
-function deleteRecipe(id) {
-  if (!confirm('Delete this recipe?')) return;
-  recipes = recipes.filter(r => r.id !== id);
-  renderRecipes();
-  toast('Recipe deleted.');
-}
+  window.saveRecipe = async function() {
+    const name = document.getElementById('rName').value.trim();
+    if (!name) { alert('Please enter a recipe name.'); return; }
 
-// ═══════════════════════════════════════════
-// ADD RECIPE
-// ═══════════════════════════════════════════
+    const ingredients = [...document.querySelectorAll('.ing-input')]
+      .map(i => i.value.trim()).filter(Boolean);
 
-function addIngredientRow() {
-  const row = document.createElement('div');
-  row.className = 'ingredient-input-row';
-  row.innerHTML = `<input type="text" class="ing-input" placeholder="e.g. 1 cup flour"><button class="remove-ing" onclick="removeIngredientRow(this)" title="Remove">✕</button>`;
-  document.getElementById('ingredientsList').appendChild(row);
-}
+    const r = {
+      id: String(Date.now()),
+      name,
+      emoji: document.getElementById('rEmoji').value.trim() || '🍽️',
+      cuisine: document.getElementById('rCuisine').value.trim(),
+      type: document.getElementById('rType').value,
+      description: document.getElementById('rDesc').value.trim(),
+      ingredients,
+      notes: document.getElementById('rNotes').value.trim()
+    };
 
-function removeIngredientRow(btn) {
-  const rows = document.querySelectorAll('#ingredientsList .ingredient-input-row');
-  if (rows.length > 1) btn.closest('.ingredient-input-row').remove();
-  else btn.closest('.ingredient-input-row').querySelector('input').value = '';
-}
+    recipes.push(r);
+    await saveRecipeToFirebase(r);
 
-function saveRecipe() {
-  const name = document.getElementById('rName').value.trim();
-  if (!name) { alert('Please enter a recipe name.'); return; }
+    ['rName','rEmoji','rCuisine','rDesc','rNotes'].forEach(id => document.getElementById(id).value = '');
+    document.getElementById('rType').value = 'Main';
+    document.getElementById('ingredientsList').innerHTML = `
+      <div class="ingredient-input-row">
+        <input type="text" class="ing-input" placeholder="e.g. 2 lbs chicken thighs">
+        <button class="remove-ing" onclick="removeIngredientRow(this)" title="Remove">✕</button>
+      </div>`;
 
-  const ingredients = [...document.querySelectorAll('.ing-input')]
-    .map(i => i.value.trim()).filter(Boolean);
+    toast(`"${r.name}" saved! 🎉`);
+    showPage('recipes');
+  }
 
-  const r = {
-    id: nextId++,
-    name,
-    emoji: document.getElementById('rEmoji').value.trim() || '🍽️',
-    cuisine: document.getElementById('rCuisine').value.trim(),
-    type: document.getElementById('rType').value,
-    description: document.getElementById('rDesc').value.trim(),
-    ingredients,
-    notes: document.getElementById('rNotes').value.trim()
-  };
+  // ══════════════════════════════════════════════
+  // STEAL A RECIPE
+  // ══════════════════════════════════════════════
+  window.stealRecipe = async function() {
+    const name = document.getElementById('stealName').value.trim();
+    if (!name) { alert('Please enter a recipe name.'); return; }
 
-  recipes.push(r);
+    const ingredientsRaw = document.getElementById('stealIngredients').value.trim();
+    if (!ingredientsRaw) { alert('Please paste some ingredients.'); return; }
 
-  // Reset form
-  ['rName','rEmoji','rCuisine','rDesc','rNotes'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('rType').value = 'Main';
-  document.getElementById('ingredientsList').innerHTML = `
-    <div class="ingredient-input-row">
-      <input type="text" class="ing-input" placeholder="e.g. 2 lbs chicken thighs">
-      <button class="remove-ing" onclick="removeIngredientRow(this)" title="Remove">✕</button>
-    </div>`;
+    const ingredients = ingredientsRaw
+      .split(/\n/)
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
 
-  toast(`"${r.name}" saved! 🎉`);
-  showPage('recipes');
-}
+    const r = {
+      id: String(Date.now()),
+      name,
+      emoji: document.getElementById('stealEmoji').value.trim() || '🍽️',
+      cuisine: document.getElementById('stealCuisine').value.trim(),
+      type: document.getElementById('stealType').value,
+      description: document.getElementById('stealUrl').value.trim() || '',
+      ingredients,
+      notes: document.getElementById('stealNotes').value.trim()
+    };
 
-// ═══════════════════════════════════════════
-// MEAL PLANNER
-// ═══════════════════════════════════════════
+    recipes.push(r);
+    await saveRecipeToFirebase(r);
 
-function renderPlanner() {
-  const grid = document.getElementById('weekGrid');
-  grid.innerHTML = DAYS.map((d, i) => {
-    const isBrunchDay = i === SAT_IDX || i === SUN_IDX;
-    const dinners = weekPlan[d].dinner;
-    const brunches = weekPlan[d].brunch;
+    document.getElementById('stealUrl').value = '';
+    document.getElementById('stealName').value = '';
+    document.getElementById('stealCuisine').value = '';
+    document.getElementById('stealType').value = 'Main';
+    document.getElementById('stealEmoji').value = '';
+    document.getElementById('stealIngredients').value = '';
+    document.getElementById('stealNotes').value = '';
 
-    const dinnerHTML = dinners.length
-      ? dinners.map(m => `<div class="planned-meal"><span>${m.emoji || '🍽️'} ${m.name}</span><button onclick="removeMeal('${d}','dinner',${m.id})" title="Remove">✕</button></div>`).join('')
-      : `<div class="drop-zone">empty</div>`;
+    toast(`"${r.name}" stolen and saved! 🕵️‍♀️`);
+    showPage('recipes');
+  }
 
-    const brunchHTML = isBrunchDay
-      ? (brunches.length
-        ? brunches.map(m => `<div class="planned-meal"><span>${m.emoji || '🍳'} ${m.name}</span><button onclick="removeMeal('${d}','brunch',${m.id})" title="Remove">✕</button></div>`).join('')
-        : `<div class="drop-zone">empty</div>`)
-      : '';
+  // ══════════════════════════════════════════════
+  // MEAL PLANNER
+  // ══════════════════════════════════════════════
+  function renderPlanner() {
+    const grid = document.getElementById('weekGrid');
+    grid.innerHTML = DAYS.map((d, i) => {
+      const isBrunchDay = i === SAT_IDX || i === SUN_IDX;
+      const dinners = weekPlan[d].dinner;
+      const brunches = weekPlan[d].brunch;
 
-    return `<div class="day-column">
-      <div class="day-header">${d}</div>
-      <div class="day-content">
-        <div class="day-slot">
-          <div class="day-slot-label">Dinner</div>
-          ${dinnerHTML}
-          <button class="btn btn-outline btn-sm" style="width:100%;margin-top:0.3rem;font-size:0.75rem;" onclick="openAddMeal('${d}','dinner')">+ Add</button>
+      const dinnerHTML = dinners.length
+        ? dinners.map(m => `<div class="planned-meal"><span>${m.emoji || '🍽️'} ${m.name}</span><button onclick="removeMeal('${d}','dinner','${m.id}')" title="Remove">✕</button></div>`).join('')
+        : `<div class="drop-zone">empty</div>`;
+
+      const brunchHTML = isBrunchDay
+        ? (brunches.length
+          ? brunches.map(m => `<div class="planned-meal"><span>${m.emoji || '🍳'} ${m.name}</span><button onclick="removeMeal('${d}','brunch','${m.id}')" title="Remove">✕</button></div>`).join('')
+          : `<div class="drop-zone">empty</div>`)
+        : '';
+
+      return `<div class="day-column">
+        <div class="day-header">${d}</div>
+        <div class="day-content">
+          <div class="day-slot">
+            <div class="day-slot-label">Dinner</div>
+            ${dinnerHTML}
+            <button class="btn btn-outline btn-sm" style="width:100%;margin-top:0.3rem;font-size:0.75rem;" onclick="openAddMeal('${d}','dinner')">+ Add</button>
+          </div>
+          ${isBrunchDay ? `<div class="day-slot" style="margin-top:0.75rem;">
+            <div class="day-slot-label">Brunch</div>
+            ${brunchHTML}
+            <button class="btn btn-outline btn-sm" style="width:100%;margin-top:0.3rem;font-size:0.75rem;" onclick="openAddMeal('${d}','brunch')">+ Add</button>
+          </div>` : ''}
         </div>
-        ${isBrunchDay ? `<div class="day-slot" style="margin-top:0.75rem;">
-          <div class="day-slot-label">Brunch</div>
-          ${brunchHTML}
-          <button class="btn btn-outline btn-sm" style="width:100%;margin-top:0.3rem;font-size:0.75rem;" onclick="openAddMeal('${d}','brunch')">+ Add</button>
-        </div>` : ''}
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function openAddMeal(day, slot) {
-  currentAddMealDay = day;
-  currentAddMealSlot = slot;
-  document.getElementById('addMealSubtitle').textContent = `${day} — ${slot.charAt(0).toUpperCase() + slot.slice(1)}`;
-  document.getElementById('mealPickerSearch').value = '';
-  renderMealPicker();
-  document.getElementById('addMealModal').classList.add('open');
-}
-
-function renderMealPicker() {
-  const q = document.getElementById('mealPickerSearch').value.toLowerCase();
-  const filtered = recipes.filter(r => {
-    const matchQ = !q || r.name.toLowerCase().includes(q);
-    const matchSlot = currentAddMealSlot === 'brunch' ? r.type === 'Brunch' : r.type !== 'Brunch';
-    return matchQ && matchSlot;
-  });
-  const list = document.getElementById('mealPickerList');
-  list.innerHTML = filtered.length ? filtered.map(r => `
-    <div class="recipe-picker-item" onclick="addMealToPlan(${r.id})">
-      <span class="pe">${r.emoji || '🍽️'}</span>
-      <div><div class="pn">${r.name}</div><div class="pt">${r.cuisine || ''} ${r.type ? '· ' + r.type : ''}</div></div>
-    </div>`).join('') : '<p style="color:#aaa;padding:1rem;text-align:center;">No recipes found.</p>';
-}
-
-function addMealToPlan(id) {
-  const r = recipes.find(x => x.id === id);
-  if (!r || !currentAddMealDay) return;
-  weekPlan[currentAddMealDay][currentAddMealSlot].push({ id: r.id, name: r.name, emoji: r.emoji });
-  closeModal('addMealModal');
-  renderPlanner();
-  toast(`${r.name} added to ${currentAddMealDay}!`);
-}
-
-function quickAddToPlanner(id) {
-  const r = recipes.find(x => x.id === id);
-  if (!r) return;
-  // Find first empty dinner slot
-  const slot = r.type === 'Brunch' ? 'brunch' : 'dinner';
-  const eligibleDays = slot === 'brunch' ? [DAYS[SAT_IDX], DAYS[SUN_IDX]] : DAYS;
-  const day = eligibleDays.find(d => weekPlan[d][slot].length === 0) || DAYS[0];
-  weekPlan[day][slot].push({ id: r.id, name: r.name, emoji: r.emoji });
-  toast(`${r.emoji} ${r.name} → ${day} ${slot}!`);
-}
-
-function removeMeal(day, slot, id) {
-  weekPlan[day][slot] = weekPlan[day][slot].filter(m => m.id !== id);
-  renderPlanner();
-}
-
-function clearWeek() {
-  if (!confirm('Clear all meals for this week?')) return;
-  DAYS.forEach(d => { weekPlan[d] = { dinner: [], brunch: [] }; });
-  renderPlanner();
-  document.getElementById('grocerySection').style.display = 'none';
-  groceryVisible = false;
-  toast('Week cleared.');
-}
-
-function toggleGrocery() {
-  groceryVisible = !groceryVisible;
-  const sec = document.getElementById('grocerySection');
-  sec.style.display = groceryVisible ? 'block' : 'none';
-  if (groceryVisible) buildGroceryList();
-}
-
-function buildGroceryList() {
-  const allIds = [];
-  DAYS.forEach(d => {
-    weekPlan[d].dinner.forEach(m => allIds.push(m.id));
-    weekPlan[d].brunch.forEach(m => allIds.push(m.id));
-  });
-  const uniqueIds = [...new Set(allIds)];
-  const allIngredients = [];
-  uniqueIds.forEach(id => {
-    const r = recipes.find(x => x.id === id);
-    if (r) r.ingredients.forEach(i => allIngredients.push(i));
-  });
-
-  const container = document.getElementById('groceryItems');
-  if (!allIngredients.length) {
-    container.innerHTML = '<p style="color:#aaa;font-size:0.9rem;">No meals planned yet.</p>';
-    return;
+      </div>`;
+    }).join('');
   }
-  container.innerHTML = allIngredients.map(i => `
-    <div class="grocery-item" id="gi-${Math.random().toString(36).slice(2)}">
-      <input type="checkbox" onchange="this.closest('.grocery-item').classList.toggle('checked',this.checked)">
-      <span>${i}</span>
-    </div>`).join('');
-}
 
-function printGrocery() {
-  window.print();
-}
+  window.openAddMeal = function(day, slot) {
+    currentAddMealDay = day;
+    currentAddMealSlot = slot;
+    document.getElementById('addMealSubtitle').textContent = `${day} — ${slot.charAt(0).toUpperCase() + slot.slice(1)}`;
+    document.getElementById('mealPickerSearch').value = '';
+    renderMealPicker();
+    document.getElementById('addMealModal').classList.add('open');
+  }
 
-// ═══════════════════════════════════════════
-// MEAL FINDER
-// ═══════════════════════════════════════════
+  window.renderMealPicker = function() {
+    const q = document.getElementById('mealPickerSearch').value.toLowerCase();
+    const filtered = recipes.filter(r => {
+      const matchQ = !q || r.name.toLowerCase().includes(q);
+      const matchSlot = currentAddMealSlot === 'brunch' ? r.type === 'Brunch' : r.type !== 'Brunch';
+      return matchQ && matchSlot;
+    });
+    const list = document.getElementById('mealPickerList');
+    list.innerHTML = filtered.length ? filtered.map(r => `
+      <div class="recipe-picker-item" onclick="addMealToPlan('${r.id}')">
+        <span class="pe">${r.emoji || '🍽️'}</span>
+        <div><div class="pn">${r.name}</div><div class="pt">${r.cuisine || ''} ${r.type ? '· ' + r.type : ''}</div></div>
+      </div>`).join('') : '<p style="color:#aaa;padding:1rem;text-align:center;">No recipes found.</p>';
+  }
 
-function addChip(type) {
-  const inp = document.getElementById(type + 'Input');
-  const val = inp.value.trim();
-  if (!val) return;
-  finderChips[type].push(val);
-  inp.value = '';
-  renderChips();
-}
+  window.addMealToPlan = async function(id) {
+    const r = recipes.find(x => String(x.id) === String(id));
+    if (!r || !currentAddMealDay) return;
+    weekPlan[currentAddMealDay][currentAddMealSlot].push({ id: r.id, name: r.name, emoji: r.emoji });
+    closeModal('addMealModal');
+    renderPlanner();
+    await saveWeekPlan();
+    toast(`${r.name} added to ${currentAddMealDay}!`);
+  }
 
-function removeChip(type, idx) {
-  finderChips[type].splice(idx, 1);
-  renderChips();
-}
+  window.quickAddToPlanner = async function(id) {
+    const r = recipes.find(x => String(x.id) === String(id));
+    if (!r) return;
+    const slot = r.type === 'Brunch' ? 'brunch' : 'dinner';
+    const eligibleDays = slot === 'brunch' ? [DAYS[SAT_IDX], DAYS[SUN_IDX]] : DAYS;
+    const day = eligibleDays.find(d => weekPlan[d][slot].length === 0) || DAYS[0];
+    weekPlan[day][slot].push({ id: r.id, name: r.name, emoji: r.emoji });
+    await saveWeekPlan();
+    toast(`${r.emoji} ${r.name} → ${day} ${slot}!`);
+  }
 
-function renderChips() {
+  window.removeMeal = async function(day, slot, id) {
+    weekPlan[day][slot] = weekPlan[day][slot].filter(m => String(m.id) !== String(id));
+    renderPlanner();
+    await saveWeekPlan();
+  }
+
+  window.clearWeek = async function() {
+    if (!confirm('Clear all meals for this week?')) return;
+    DAYS.forEach(d => { weekPlan[d] = { dinner: [], brunch: [] }; });
+    renderPlanner();
+    document.getElementById('grocerySection').style.display = 'none';
+    groceryVisible = false;
+    await saveWeekPlan();
+    toast('Week cleared.');
+  }
+
+  window.toggleGrocery = function() {
+    groceryVisible = !groceryVisible;
+    const sec = document.getElementById('grocerySection');
+    sec.style.display = groceryVisible ? 'block' : 'none';
+    if (groceryVisible) buildGroceryList();
+  }
+
+  function buildGroceryList() {
+    const allIds = [];
+    DAYS.forEach(d => {
+      weekPlan[d].dinner.forEach(m => allIds.push(m.id));
+      weekPlan[d].brunch.forEach(m => allIds.push(m.id));
+    });
+    const uniqueIds = [...new Set(allIds)];
+    const allIngredients = [];
+    uniqueIds.forEach(id => {
+      const r = recipes.find(x => String(x.id) === String(id));
+      if (r) r.ingredients.forEach(i => allIngredients.push(i));
+    });
+
+    const container = document.getElementById('groceryItems');
+    if (!allIngredients.length) {
+      container.innerHTML = '<p style="color:#aaa;font-size:0.9rem;">No meals planned yet.</p>';
+      return;
+    }
+    container.innerHTML = allIngredients.map(i => `
+      <div class="grocery-item">
+        <input type="checkbox" onchange="this.closest('.grocery-item').classList.toggle('checked',this.checked)">
+        <span>${i}</span>
+      </div>`).join('');
+  }
+
+  window.printGrocery = function() { window.print(); }
+
+  // ══════════════════════════════════════════════
+  // MEAL FINDER
+  // ══════════════════════════════════════════════
+  window.addChip = function(type) {
+    const inp = document.getElementById(type + 'Input');
+    const val = inp.value.trim();
+    if (!val) return;
+    finderChips[type].push(val);
+    inp.value = '';
+    renderChips();
+  }
+
+  window.removeChip = function(type, idx) {
+    finderChips[type].splice(idx, 1);
+    renderChips();
+  }
+
+  function renderChips() {
+    ['meat','veg','starch','other'].forEach(type => {
+      document.getElementById(type + 'Chips').innerHTML =
+        finderChips[type].map((c, i) => `<div class="chip">${c}<button onclick="removeChip('${type}',${i})">✕</button></div>`).join('');
+    });
+  }
+
+  window.clearFinder = function() {
+    finderChips = { meat: [], veg: [], starch: [], other: [] };
+    renderChips();
+    document.getElementById('finderResults').innerHTML = `<div class="no-match"><div style="font-size:2.5rem;margin-bottom:0.75rem;">🥘</div>Add some ingredients on the left and hit <strong>Find Matching Meals</strong>!</div>`;
+  }
+
+  window.findMeals = function() {
+    const allChips = [...finderChips.meat, ...finderChips.veg, ...finderChips.starch, ...finderChips.other]
+      .map(c => c.toLowerCase());
+
+    if (!allChips.length) {
+      document.getElementById('finderResults').innerHTML = `<div class="no-match">Add at least one ingredient first!</div>`;
+      return;
+    }
+
+    const scored = recipes.map(r => {
+      const ings = (r.ingredients || []).join(' ').toLowerCase() + ' ' + r.name.toLowerCase();
+      const matches = allChips.filter(c => ings.includes(c));
+      return { r, matches, score: matches.length };
+    }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+
+    const container = document.getElementById('finderResults');
+    if (!scored.length) {
+      container.innerHTML = `<div class="no-match"><div style="font-size:2.5rem;margin-bottom:0.75rem;">😔</div>No matching recipes found. Try adding more ingredients!</div>`;
+      return;
+    }
+
+    const mains   = scored.filter(x => x.r.type === 'Main' || x.r.type === 'Soup/Stew');
+    const sides   = scored.filter(x => x.r.type === 'Side');
+    const brunch  = scored.filter(x => x.r.type === 'Brunch');
+    const dessert = scored.filter(x => x.r.type === 'Dessert');
+
+    let html = '';
+    const section = (label, items) => items.length ? `
+      <h3 style="font-family:'Playfair Display',serif;color:var(--brown);margin:1rem 0 0.75rem;font-size:1.2rem;">${label}</h3>
+      ${items.map(({r, matches, score}) => `
+        <div class="match-card" onclick="openRecipeModal('${r.id}')">
+          <div class="match-emoji">${r.emoji || '🍽️'}</div>
+          <div class="match-info">
+            <h4>${r.name}</h4>
+            <p>${r.cuisine || ''} ${r.type ? '· ' + r.type : ''} · Uses: ${matches.join(', ')}</p>
+          </div>
+          <div class="match-score ${score >= 2 ? 'high' : ''}">${score} match${score !== 1 ? 'es' : ''}</div>
+        </div>`).join('')}` : '';
+
+    html += section('🍖 Mains', mains);
+    html += section('🥗 Sides', sides);
+    html += section('🥞 Brunch', brunch);
+    html += section('🍰 Desserts', dessert);
+
+    container.innerHTML = html;
+  }
+
+  // Enter key for finder
   ['meat','veg','starch','other'].forEach(type => {
-    document.getElementById(type + 'Chips').innerHTML =
-      finderChips[type].map((c, i) => `<div class="chip">${c}<button onclick="removeChip('${type}',${i})">✕</button></div>`).join('');
+    document.getElementById(type + 'Input')?.addEventListener('keydown', e => {
+      if (e.key === 'Enter') addChip(type);
+    });
   });
-}
 
-function clearFinder() {
-  finderChips = { meat: [], veg: [], starch: [], other: [] };
-  renderChips();
-  document.getElementById('finderResults').innerHTML = `<div class="no-match"><div style="font-size:2.5rem;margin-bottom:0.75rem;">🥘</div>Add some ingredients on the left and hit <strong>Find Matching Meals</strong>!</div>`;
-}
+  // Close modals on overlay click
+  document.querySelectorAll('.modal-overlay').forEach(o => {
+    o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); });
+  });
 
-function findMeals() {
-  const allChips = [...finderChips.meat, ...finderChips.veg, ...finderChips.starch, ...finderChips.other]
-    .map(c => c.toLowerCase());
-
-  if (!allChips.length) {
-    document.getElementById('finderResults').innerHTML = `<div class="no-match">Add at least one ingredient first!</div>`;
-    return;
+  // ══════════════════════════════════════════════
+  // TOAST
+  // ══════════════════════════════════════════════
+  let toastTimer;
+  window.toast = function(msg) {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
   }
 
-  const scored = recipes.map(r => {
-    const ings = (r.ingredients || []).join(' ').toLowerCase() + ' ' + r.name.toLowerCase();
-    const matches = allChips.filter(c => ings.includes(c));
-    return { r, matches, score: matches.length };
-  }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
-
-  const container = document.getElementById('finderResults');
-  if (!scored.length) {
-    container.innerHTML = `<div class="no-match"><div style="font-size:2.5rem;margin-bottom:0.75rem;">😔</div>No matching recipes found. Try adding more ingredients or add a new recipe that uses what you have!</div>`;
-    return;
-  }
-
-  const mains = scored.filter(x => x.r.type === 'Main' || x.r.type === 'Soup/Stew');
-  const sides = scored.filter(x => x.r.type === 'Side');
-  const brunch = scored.filter(x => x.r.type === 'Brunch');
-  const dessert = scored.filter(x => x.r.type === 'Dessert');
-
-  let html = '';
-  const section = (label, items) => items.length ? `
-    <h3 style="font-family:'Playfair Display',serif;color:var(--brown);margin:1rem 0 0.75rem;font-size:1.2rem;">${label}</h3>
-    ${items.map(({r, matches, score}) => `
-      <div class="match-card" onclick="openRecipeModal(${r.id})">
-        <div class="match-emoji">${r.emoji || '🍽️'}</div>
-        <div class="match-info">
-          <h4>${r.name}</h4>
-          <p>${r.cuisine || ''} ${r.type ? '· ' + r.type : ''} · Uses: ${matches.join(', ')}</p>
-        </div>
-        <div class="match-score ${score >= 2 ? 'high' : ''}">${score} match${score !== 1 ? 'es' : ''}</div>
-      </div>`).join('')}` : '';
-
-  html += section('🍖 Mains', mains);
-  html += section('🥗 Sides', sides);
-  html += section('🥞 Brunch', brunch);
-  html += section('🍰 Desserts', dessert);
-
-  container.innerHTML = html;
-}
-
-// Allow Enter key for finder inputs
-['meat','veg','starch','other'].forEach(type => {
-  document.getElementById(type + 'Input')?.addEventListener('keydown', e => {
-    if (e.key === 'Enter') addChip(type);
-  });
-});
-
-// ═══════════════════════════════════════════
-// TOAST
-// ═══════════════════════════════════════════
-
-let toastTimer;
-function toast(msg) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2800);
-}
-
-// Close modals on overlay click
-document.querySelectorAll('.modal-overlay').forEach(o => {
-  o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); });
-});
-
-// Init
-renderHome();
-
-  // ═══════════════════════════════════════════
-// STEAL A RECIPE
-// ═══════════════════════════════════════════
-
-function stealRecipe() {
-  const name = document.getElementById('stealName').value.trim();
-  if (!name) { alert('Please enter a recipe name.'); return; }
-
-  const ingredientsRaw = document.getElementById('stealIngredients').value.trim();
-  if (!ingredientsRaw) { alert('Please paste some ingredients.'); return; }
-
-  // Split by newlines and clean up
-  const ingredients = ingredientsRaw
-    .split(/\n/)
-    .map(line => line.trim())
-    .filter(line => line.length > 0);
-
-  const r = {
-    id: nextId++,
-    name,
-    emoji: document.getElementById('stealEmoji').value.trim() || '🍽️',
-    cuisine: document.getElementById('stealCuisine').value.trim(),
-    type: document.getElementById('stealType').value,
-    description: document.getElementById('stealUrl').value.trim() || '',
-    ingredients,
-    notes: document.getElementById('stealNotes').value.trim()
-  };
-
-  recipes.push(r);
-
-  // Clear form
-  document.getElementById('stealUrl').value = '';
-  document.getElementById('stealName').value = '';
-  document.getElementById('stealCuisine').value = '';
-  document.getElementById('stealType').value = 'Main';
-  document.getElementById('stealEmoji').value = '';
-  document.getElementById('stealIngredients').value = '';
-  document.getElementById('stealNotes').value = '';
-
-  toast(`"${r.name}" stolen and saved! 🕵️‍♀️`);
-  showPage('recipes');
-}
 </script>
 </body>
 </html>
